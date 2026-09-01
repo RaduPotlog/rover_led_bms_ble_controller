@@ -16,9 +16,23 @@
 #define ROVER_DEBUG 1
 #endif
 
+/// @brief Per-frame BMS decode logging, off by default.
+/// @note This replaces PRINT_LOGS, which was never defined anywhere -- every
+///       diagnostic block in daly_100_bms.cpp was therefore dead code. It is a
+///       separate switch from ROVER_DEBUG because it is extremely chatty: one
+///       block per decoded frame, nine frames per poll cycle. Setting it to 1
+///       has no effect unless ROVER_DEBUG is also non-zero.
+#ifndef ROVER_DEBUG_BMS
+#define ROVER_DEBUG_BMS 0
+#endif
+
 #if ROVER_DEBUG == 2
+/// @brief RX pin for the debug UART.
+/// @note -1 leaves it unassigned. Logging only ever transmits, and claiming a pin
+///       for a receiver nothing reads is how this collided with the APA102 clock
+///       on GPIO 16. Set it to a real pin only if you add an input path.
 #ifndef ROVER_LOG_RX_PIN
-#define ROVER_LOG_RX_PIN 16
+#define ROVER_LOG_RX_PIN -1
 #endif
 #ifndef ROVER_LOG_TX_PIN
 #define ROVER_LOG_TX_PIN 17

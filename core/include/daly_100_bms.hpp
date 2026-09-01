@@ -5,6 +5,22 @@
 #include <stdint.h>
 #include <cstring>
 
+/// @brief Portable struct packing.
+/// @note The wire layout of BmsData and Alarm is load-bearing -- the UDP telemetry
+///       payload is these two structs' bytes, and a receiver off-board parses them
+///       at fixed offsets. __attribute__((packed)) is a GCC/Clang spelling that MSVC
+///       rejects outright, so the host test build needs an equivalent rather than a
+///       silent fallback to default padding.
+#if defined(_MSC_VER)
+#  define ROVER_PACK_BEGIN __pragma(pack(push, 1))
+#  define ROVER_PACK_END   __pragma(pack(pop))
+#  define ROVER_PACKED
+#else
+#  define ROVER_PACK_BEGIN
+#  define ROVER_PACK_END
+#  define ROVER_PACKED     __attribute__((packed))
+#endif
+
 namespace daly100_bms
 {
 
@@ -13,6 +29,14 @@ class Daly100Bms
 {
 
 public:
+
+    /// @brief Largest pack the decoder can represent, and the size of cellVmV
+    ///        and cellBalanceState. 0x97 reports balance state as 6 bytes of
+    ///        bit flags, which is exactly this many cells.
+    static constexpr int kMaxCells = 48;
+
+    /// @brief Size of cellTemperature; the largest sensor count 0x96 can fill.
+    static constexpr int kMaxTempSensors = 16;
 
     /// @brief 
     enum ReturnStatus
@@ -45,6 +69,7 @@ public:
      * @brief get struct holds all the data collected from the BMS
      * @details Comments specify precision and units where applicable
      */
+    ROVER_PACK_BEGIN
     struct BmsData
     {
         // Pack the variables directly into matching memory slices
@@ -82,21 +107,23 @@ public:
             int bmsCycles;        // charge / discharge cycles
 
             // data from 0x95
-            float cellVmV[48]; // Store Cell Voltages (mV)
+            float cellVmV[kMaxCells]; // Store Cell Voltages (mV)
 
             // data from 0x96
-            int cellTemperature[16]; // array of cell Temperature sensors
+            int cellTemperature[kMaxTempSensors]; // array of cell Temperature sensors
 
             // data from 0x97
-            bool cellBalanceState[48]; // bool array of cell balance states
+            bool cellBalanceState[kMaxCells]; // bool array of cell balance states
             bool cellBalanceActive;    // bool is cell balance active
-        } __attribute__((packed)); // Forces the compiler to omit padding gaps
-    } get;
+        } ROVER_PACKED; // Forces the compiler to omit padding gaps
+    } get{};
+    ROVER_PACK_END
 
     /**
      * @brief alarm struct holds booleans corresponding to all the possible alarms 
      *        (aka errors/warnings) the BMS can report
      */
+    ROVER_PACK_BEGIN
     struct Alarm {
         // Pack the variables directly into matching memory slices
         struct {
@@ -163,10 +190,16 @@ public:
             uint8_t failureOfShortCircuitProtection  : 1;
             uint8_t failureOfLowVoltageNoCharging    : 1;
             uint8_t : 4; // Padding bits to finish the 0x06 byte boundary
-        } __attribute__((packed)); // Forces the compiler to omit padding gaps
-    } alarm;
+        } ROVER_PACKED; // Forces the compiler to omit padding gaps
+    } alarm{};
+    ROVER_PACK_END
 
-    /// @brief 
+    /// @brief Construct a decoder with all decoded state zeroed.
+    /// @note get and alarm carry brace initialisers because nothing else zeroes
+    ///       them. On the target this class is instantiated as a file-scope static
+    ///       and so was zero-initialised by storage duration, which masked the gap;
+    ///       any other storage class read uninitialised values until a frame for
+    ///       that field arrived.
     explicit Daly100Bms() 
     {
 
@@ -190,6 +223,24 @@ public:
     /// @brief 
     /// @param frame 
     void decode_response(const uint8_t *frame);
+
+    /// @brief Push received bytes into the reassembly buffer and decode any whole
+    ///        frames they complete.
+    /// @param data Bytes as they arrived; need not align to frame boundaries.
+    /// @param len Number of bytes.
+    /// @note BLE notifications carry an arbitrary slice of the 13-byte frame
+    ///       stream, so resynchronisation lives here rather than at the call site.
+    ///       A candidate sync byte is accepted only if the 13 bytes starting there
+    ///       also checksum; otherwise the scan advances by one byte. Advancing by a
+    ///       whole frame instead would swallow the next real frame whenever 0xA5
+    ///       appeared inside a payload.
+    void feed(const uint8_t *data, size_t len);
+
+    /// @brief Test whether a buffer holds a well-formed frame.
+    /// @param pkt Candidate frame.
+    /// @param len Length of pkt.
+    /// @return true if the trailing byte matches the sum of those before it.
+    static bool is_valid_frame(const uint8_t *pkt, size_t len);
 
     
     float get_pack_voltage() 
@@ -237,6 +288,13 @@ public:
         return get.disChargeFetState;     
     }
 
+    /// @brief Number of 0x95 frames needed to assemble a full set of cell voltages.
+    /// @note Derived from the cell count reported by 0x94. Exposed for tests.
+    int get_expected_frame_count() const
+    {
+        return expectedFramesNeeded;
+    }
+
 private:
 
     /// @brief 
@@ -248,11 +306,6 @@ private:
     /// @brief 
     void reset_cell_assembly();
     
-    /// @brief 
-    /// @param pkt 
-    /// @param len 
-    /// @return 
-    bool eval_checksum(const uint8_t *pkt, size_t len);
     
     /// @brief 
     void recompute_expected_frames();
@@ -300,7 +353,25 @@ private:
     /// @return 
     ReturnStatus get_failure_codes(const uint8_t *payload);
     
-    bool frame_received_[16];
+    /// @brief Wire size of every Daly request and response frame.
+    static constexpr size_t kFrameSize = 13;
+
+    /// @brief Reassembly buffer for the BLE notification byte stream.
+    /// @note Sized for a healthy backlog of frames rather than a single one; the
+    ///       longest burst is the four-frame 0x95 cell voltage set at 52 bytes.
+    static constexpr size_t kRxBufferSize = 256;
+
+    /// @brief Bytes received but not yet consumed as whole frames.
+    uint8_t rx_buf_[kRxBufferSize];
+
+    /// @brief Number of valid bytes in rx_buf_.
+    size_t rx_len_{0};
+
+    /// @brief Which 0x95 frames of the current cell voltage set have arrived.
+    /// @note Initialised here as well as by reset_cell_assembly(), because a 0x95
+    ///       response that arrives before any 0x94 or 0x95 request would otherwise
+    ///       be indexed against uninitialised flags.
+    bool frame_received_[16]{};
 
     int frames_received_count_{0};
 

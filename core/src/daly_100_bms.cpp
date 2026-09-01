@@ -1,5 +1,3 @@
-#include <WString.h>
-
 #include "daly_100_bms.hpp"
 #include "logging.hpp"
 
@@ -13,9 +11,9 @@ void Daly100Bms::reset_cell_assembly()
     assembled_ = false;
 }
 
-bool Daly100Bms::eval_checksum(const uint8_t *pkt, size_t len) 
+bool Daly100Bms::is_valid_frame(const uint8_t *pkt, size_t len) 
 {
-    if (len < 2) {
+    if (!pkt || len < 2) {
         return false;
     }
     
@@ -26,6 +24,49 @@ bool Daly100Bms::eval_checksum(const uint8_t *pkt, size_t len)
     }
 
     return (sum == pkt[len - 1]);
+}
+
+void Daly100Bms::feed(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0) {
+        return;
+    }
+
+    // On overflow drop the oldest bytes, not the newest: whatever is at the head
+    // is a fragment that never completed, while the arriving bytes may finish a
+    // frame. The previous implementation discarded the whole buffer instead.
+    if (len >= kRxBufferSize) {
+        data += (len - kRxBufferSize);
+        len = kRxBufferSize;
+        rx_len_ = 0;
+    } else if (rx_len_ + len > kRxBufferSize) {
+        const size_t drop = (rx_len_ + len) - kRxBufferSize;
+        memmove(rx_buf_, rx_buf_ + drop, rx_len_ - drop);
+        rx_len_ -= drop;
+    }
+
+    memcpy(rx_buf_ + rx_len_, data, len);
+    rx_len_ += len;
+
+    // Scan with an index and compact once at the end, rather than memmove-ing the
+    // remainder on every byte.
+    size_t head = 0;
+
+    while ((rx_len_ - head) >= kFrameSize) {
+
+        if (rx_buf_[head] != 0xA5 || !is_valid_frame(rx_buf_ + head, kFrameSize)) {
+            ++head;
+            continue;
+        }
+
+        decode_response(rx_buf_ + head);
+        head += kFrameSize;
+    }
+
+    if (head > 0) {
+        rx_len_ -= head;
+        memmove(rx_buf_, rx_buf_ + head, rx_len_);
+    }
 }
 
 void Daly100Bms::recompute_expected_frames()
@@ -142,34 +183,32 @@ Daly100Bms::ReturnStatus Daly100Bms::get_cell_voltages(const uint8_t *payload)
         return E_OK;
     }
     
-    int cellNo = 0;
+    // Each 0x95 frame carries exactly three cells, and which three is determined
+    // by the frame index -- payload[1..6] is three big-endian millivolt pairs.
+    for (int i = 0; i < 3; ++i) {
+        const int cellNo = (idx * 3) + i;
 
-    for (size_t i = 0; i <= ceil(get.numberOfCells / 3); i++) {
-        for (size_t i = 0; i <= ceil(get.numberOfCells / 3); i++) {
-            for (size_t i = 0; i < 3; i++) {
-                get.cellVmV[cellNo] = (payload[1 + i + i] << 8) | payload[2 + i + i];
-                cellNo++;
-                if (cellNo >= get.numberOfCells) {
-                    break;
-                }
-            }
+        if (cellNo >= expectedCellCount || cellNo >= kMaxCells) {
+            break;
         }
+
+        get.cellVmV[cellNo] = static_cast<float>((payload[1 + 2 * i] << 8) | payload[2 + 2 * i]);
     }
 
     frame_received_[idx] = true;
     frames_received_count_++;
 
     bool allGot = true;
-    
+
     for (int f = 0; f < expectedFramesNeeded; ++f) {
-        if (!frame_received_[f]) { 
-            allGot = false; 
-            return E_NOK; 
+        if (!frame_received_[f]) {
+            allGot = false;
+            break;
         }
     }
-    
+
     if (allGot) {
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
         print_cell_voltages();
 #endif
         assembled_ = true;
@@ -182,16 +221,27 @@ Daly100Bms::ReturnStatus Daly100Bms::get_cell_temperature(const uint8_t *payload
 {
     ReturnStatus ret = E_OK;
 
-    int sensorNo = 0;
+    // Like 0x95, each frame carries a fixed slice -- seven sensors here -- and the
+    // frame index says which slice. The BMS is inconsistent about whether frame
+    // numbering starts at 0 or 1, so reuse the base detected for cell voltages and
+    // fall back to treating the first frame seen as the base.
+    const int rawFrameNo = payload[0];
+    const int base_frame = frame_base_detected_ ? frame_base_ : (rawFrameNo == 0 ? 0 : 1);
+    const int idx = rawFrameNo - base_frame;
 
-    for (size_t i = 0; i <= ceil(get.numOfTempSensors / 7); i++) {
-        for (size_t j = 0; j < 7; j++) {
+    if (idx < 0) {
+        return E_NOK;
+    }
 
-            get.cellTemperature[sensorNo] = (payload[1 + j] - 40);
-            sensorNo++;
+    // The BMS adds a +40 offset so it never has to send a negative number.
+    for (int j = 0; j < 7; ++j) {
+        const int sensorNo = (idx * 7) + j;
 
-            if (sensorNo + 1 > get.numOfTempSensors) break;
+        if (sensorNo >= get.numOfTempSensors || sensorNo >= kMaxTempSensors) {
+            break;
         }
+
+        get.cellTemperature[sensorNo] = payload[1 + j] - 40;
     }
 
     return ret;
@@ -202,32 +252,24 @@ Daly100Bms::ReturnStatus Daly100Bms::get_cell_balance_state(const uint8_t *paylo
     ReturnStatus ret = E_OK;
 
     int cellBalance = 0;
-    int cellBit = 0;
 
-    // We expect 6 bytes response for this command
-    for (size_t i = 0; i < 6; i++) {
-        // For each bit in the byte, pull out the cell balance state boolean
-        for (size_t j = 0; j < 8; j++) {
-            get.cellBalanceState[cellBit] = bitRead(payload[i + 4], j);
-            cellBit++;
+    // Six bytes, one bit per cell, LSB first -- exactly 48 bits for kMaxCells.
+    // These live at payload[0..5]; the previous payload[i + 4] applied the
+    // frame-to-payload offset a second time and read past the end of the frame.
+    for (int i = 0; i < 6; i++) {
+        for (int j = 0; j < 8; j++) {
+            const bool balancing = bitRead(payload[i], j) != 0;
 
-            if (bitRead(payload[i + 4], j)) {
+            get.cellBalanceState[(i * 8) + j] = balancing;
+
+            if (balancing) {
                 cellBalance++;
-            }
-            
-            if (cellBit >= 47) {
-                break;
             }
         }
     }
 
-    if (cellBalance > 0) {
-        get.cellBalanceActive = ReturnStatus::E_OK;
-    }
-    else {
-        get.cellBalanceActive = ReturnStatus::E_NOK;
-    }
-    
+    get.cellBalanceActive = (cellBalance > 0);
+
     return ret;
 }
 
@@ -308,8 +350,8 @@ void Daly100Bms::print_cell_voltages()
     ROVER_LOGLN("--- Cell Voltages ---");
 
     for (int i = 0; i < expectedCellCount; ++i) {
-        uint16_t mv = get.cellVmV[i];
-        float v = mv / 1000.0f;
+        const uint16_t mv = static_cast<uint16_t>(get.cellVmV[i]);
+        const float v = mv / 1000.0f;
         ROVER_LOGF("Cell %02d: %u mV (%.3f V)\n", i + 1, mv, v);
     }
     
@@ -351,7 +393,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         return;
     }
     
-    if (!eval_checksum(frame, 13)) {
+    if (!is_valid_frame(frame, kFrameSize)) {
         return;
     }
 
@@ -361,7 +403,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
     switch (cmd) {
         case VOUT_IOUT_SOC: {
             (void)get_pack_measurements(payload);
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x90 ---");
             ROVER_LOGLN("===============================================");
@@ -376,7 +418,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         }
         case MIN_MAX_CELL_VOLTAGE: {
             (void)get_min_max_cell_voltage(payload);
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x91 ---");
             ROVER_LOGLN("===============================================");
@@ -391,7 +433,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         }
         case MIN_MAX_TEMPERATURE: {
             (void)get_pack_temp(payload);
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x92 ---");
             ROVER_LOGLN("===============================================");
@@ -418,7 +460,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
             const char* chargeMOSstr    = (get.chargeFetState == true)    ? "ON" : "OFF";
             const char* dischargeMOSstr = (get.disChargeFetState == true) ? "ON" : "OFF";
 
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x93 ---");
             ROVER_LOGLN("===============================================");
@@ -443,7 +485,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
             uint8_t loadStatus     = payload[3];  // 0=disconnected, 1=connected
             uint16_t cycles = (payload[5] << 8) | payload[6]; // bytes 5-6
 
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x94 ---");
             ROVER_LOGLN("===============================================");
@@ -469,7 +511,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         }
         case CELL_TEMPERATURE: {
             (void)get_cell_temperature(payload);
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x96 ---");
             ROVER_LOGLN("===============================================");
@@ -486,7 +528,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         }
         case CELL_BALANCE_STATE: {
             get_cell_balance_state(payload);
-#ifdef PRINT_LOGS
+#if ROVER_DEBUG_BMS
             ROVER_LOGLN("");
             ROVER_LOGLN("--- DALY FRAME CMD=0x97 ---");
             ROVER_LOGLN("===============================================");

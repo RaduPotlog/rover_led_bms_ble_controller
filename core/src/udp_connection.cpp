@@ -9,28 +9,39 @@ UdpConnection::UdpConnection()
 : connector_interface_{nullptr}
 , port_(0)
 {
-    
+
 }
 
 bool UdpConnection::init(
-    ConnectorInterface *connector_interface, 
-    const int port,
+    ConnectorInterface *connector_interface,
+    const uint16_t port,
     AuPacketHandlerFunction cb)
 {
+    if (!connector_interface) {
+        return false;
+    }
+
     connector_interface_ = connector_interface;
     port_ = port;
-    is_initialized_ = true;
     data_recv_handler_ = cb;
+    is_initialized_ = true;
 
     return true;
 }
 
-bool UdpConnection::pool() 
+void UdpConnection::set_destination(const IPAddress &ip, const uint16_t port)
+{
+    dest_ip_ = ip;
+    dest_port_ = port;
+    has_destination_ = true;
+}
+
+bool UdpConnection::poll()
 {
     if (is_initialized_ == false) {
         return false;
     }
-    
+
     if (!connector_interface_) {
         return false;
     }
@@ -46,17 +57,15 @@ bool UdpConnection::pool()
 
     if (is_interface_connected_ == false) {
         ROVER_LOGLN("Start udp listener...");
-        
+
         if (udp_.listen(port_)) {
-            ROVER_LOGLN("UDP listening on port " + String(port_) + "...");
-            
             udp_.onPacket([this](AsyncUDPPacket packet) {
                 if (data_recv_handler_) {
                     data_recv_handler_(packet);
                 }
             });
 
-            ROVER_LOGLN("UDP listening on port " + String(port_) + " started successfully!");
+            ROVER_LOGLN("UDP listening on port " + String(port_) + "...");
             is_interface_connected_ = true;
         } else {
             ROVER_LOGLN("Failed to start UDP listener");
@@ -67,25 +76,24 @@ bool UdpConnection::pool()
     return true;
 }
 
-bool UdpConnection::send(const uint8_t *data, const size_t len) 
+size_t UdpConnection::send(const uint8_t *data, const size_t len)
 {
-    if (is_initialized_ == false) {
-        return false;
+    if (is_initialized_ == false || !data || len == 0) {
+        return 0;
+    }
+
+    if (!has_destination_) {
+        return 0;
     }
 
     if (!is_interface_connected_) {
-        ROVER_LOGLN("UDP connection is not active. Cannot send data.");
-        return false;
+        return 0;
     }
-    
-    size_t bytes_sent = udp_.writeTo(data, len, config::kBmsUdpDestIp, port_);
-    
-    (void)bytes_sent; // Suppress unused variable warning
-    
-    return true;
+
+    return udp_.writeTo(data, len, dest_ip_, dest_port_);
 }
 
-bool UdpConnection::is_connected() 
+bool UdpConnection::is_connected()
 {
     return is_interface_connected_;
 }

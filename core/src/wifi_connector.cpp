@@ -1,4 +1,5 @@
 #include "wifi_connector.hpp"
+#include "config.hpp"
 #include "logging.hpp"
 
 namespace connector
@@ -35,8 +36,9 @@ void WifiConnector::disconnected_callback(WiFiEvent_t event, WiFiEventInfo_t inf
     ROVER_LOGLN(info.wifi_sta_disconnected.reason);
     ROVER_LOGLN("Trying to Reconnect");
 
+    // Reconnecting from here would retry immediately and repeatedly for as long
+    // as the AP stays down. poll() does it on a timer instead.
     is_wifi_connected_ = false;
-    WiFi.reconnect();
 }
 
 void WifiConnector::print_status() 
@@ -69,11 +71,6 @@ void WifiConnector::set_static_ip(
     use_static_ip_ = true;
 }
 
-void WifiConnector::connect()
-{
-
-}
-
 void WifiConnector::connect(
     const String& ssid, 
     const String& pass)
@@ -99,6 +96,23 @@ void WifiConnector::connect(
 void WifiConnector::disconnect()
 {
     WiFi.disconnect();
+}
+
+void WifiConnector::poll()
+{
+    if (is_wifi_connected_) {
+        last_reconnect_ms_ = millis();
+        return;
+    }
+
+    if ((millis() - last_reconnect_ms_) < config::kWifiReconnectMs) {
+        return;
+    }
+
+    last_reconnect_ms_ = millis();
+
+    ROVER_LOGLN("Retrying WiFi connection...");
+    WiFi.reconnect();
 }
 
 bool WifiConnector::is_connected()
