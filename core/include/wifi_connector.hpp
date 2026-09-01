@@ -37,15 +37,21 @@ public:
         const IPAddress& dns1,
         const IPAddress& dns2);
 
-    /// @brief Connect to the WiFi network using the stored SSID and password.
-    void connect() override;
+    /// @brief Join the WiFi network using the provided credentials.
+    /// @param ssid Network name.
+    /// @param pass Pre-shared key.
+    /// @note Not part of ConnectorInterface -- credentials are specific to WiFi.
+    ///       Call once from setup(); poll() maintains the link from then on.
+    void connect(const String& ssid, const String& pass);
 
-    /// @brief Connect to the WiFi network using the provided SSID and password.
-    void connect(const String& ssid, const String& pass) override;
-    
     /// @brief Disconnect from the WiFi network.
-    void disconnect() override;
-    
+    void disconnect();
+
+    /// @brief Retry the connection if it has been down for kWifiReconnectMs.
+    /// @note The reconnect used to be issued straight from the disconnect event
+    ///       handler, which hammered a down AP as fast as it could refuse.
+    void poll() override;
+
     /// @brief Check if the WiFi connection is active.
     /// @return true if connected to the WiFi network, false otherwise.
     bool is_connected() override;
@@ -96,7 +102,12 @@ private:
     IPAddress dns2_;
 
     /// @brief Connection state, shared with the static event callbacks.
+    /// @note Static because the Arduino WiFi event API takes a plain function
+    ///       pointer. Safe here only because this class is a singleton.
     static bool is_wifi_connected_;
+
+    /// @brief millis() of the last reconnect attempt.
+    unsigned long last_reconnect_ms_{0};
 };
 
 } // namespace connector

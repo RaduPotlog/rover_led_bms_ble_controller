@@ -1,0 +1,14 @@
+/// @file config_local.hpp.example
+/// @brief Template for deployment secrets.
+///
+/// Copy to config_local.hpp (which is git-ignored) and fill in your network.
+/// config.hpp picks it up automatically and falls back to placeholders if it
+/// is absent, so a fresh clone still builds -- it just will not associate.
+
+#ifndef CONFIG_LOCAL_HPP
+#define CONFIG_LOCAL_HPP
+
+#define ROVER_WIFI_SSID "your-ssid"
+#define ROVER_WIFI_PASS "your-passphrase"
+
+#endif // CONFIG_LOCAL_HPP
