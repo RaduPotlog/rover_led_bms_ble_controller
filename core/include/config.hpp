@@ -163,14 +163,57 @@ constexpr uint8_t kBleMaxFailedConnects = 3;
  * LED strip
  * -------------------------------------------------------------------------- */
 
-/// @brief Number of APA102 LEDs on the strip.
-constexpr int kNumLeds = 24;
+/// @brief Number of LEDs on the strip.
+/// @note Override with -D ROVER_NUM_LEDS=<n> in platformio.ini rather than
+///       editing this file. Everything else about the strip -- both frame
+///       buffers, every render loop and the UDP frame size -- derives from it.
+#ifndef ROVER_NUM_LEDS
+#define ROVER_NUM_LEDS 40
+#endif
 
-/// @brief APA102 data line.
+constexpr int kNumLeds = ROVER_NUM_LEDS;
+static_assert(kNumLeds > 0, "ROVER_NUM_LEDS must be positive");
+
+/// @brief Strip data line.
 constexpr uint8_t kLedDataPin = 5;
 
-/// @brief APA102 clock line.
+/// @brief Strip clock line. Unused when ROVER_LED_CLOCKLESS is 1.
 constexpr uint8_t kLedClockPin = 16;
+
+/// @brief SPI clock rate for a clocked chipset, in MHz.
+/// @note 6 is FastLED's own default for APA102 and the reason is in its source:
+///       "APA102 has a bug where long strip can't handle full speed due to clock
+///       degredation" (chipsets.h, APA102Controller's SPI_SPEED parameter). It is
+///       stated here rather than left implicit so that changing it is one build
+///       flag instead of an argument buried in a template default.
+/// @note Not a literal frequency. DATA_RATE_MHZ(X) expands to a cycles-per-bit
+///       divider, (F_CPU / 1000000) / X, and the achieved rate runs below nominal
+///       because the GPIO writes themselves are not counted.
+#ifndef ROVER_LED_SPI_MHZ
+#define ROVER_LED_SPI_MHZ 6
+#endif
+constexpr uint32_t kLedSpiMhz = ROVER_LED_SPI_MHZ;
+
+/// @brief Global FastLED brightness, 0-255.
+/// @note This is the knob that separates a power limit from a data limit: if the
+///       whole strip lights at 32 but only the first few at 255, the supply is
+///       browning out and needs 5 V injected at the far end.
+#ifndef ROVER_LED_BRIGHTNESS
+#define ROVER_LED_BRIGHTNESS 255
+#endif
+constexpr uint8_t kLedBrightness = ROVER_LED_BRIGHTNESS;
+
+/// @brief Current budget for the strip at 5 V, in milliamps. 0 disables the cap.
+/// @note FastLED scales brightness down to stay inside this. It is the honest way
+///       to run a strip on a supply that cannot feed it -- 40 APA102s at full
+///       white want around 2.4 A, which a dev board's 5 V pin will not give.
+/// @note Left at 0 by default deliberately. A cap that silently dims the strip
+///       would hide the very wiring fault it is compensating for; reach for it
+///       only once the supply has been measured and cannot be changed.
+#ifndef ROVER_LED_MAX_MILLIAMPS
+#define ROVER_LED_MAX_MILLIAMPS 0
+#endif
+constexpr uint32_t kLedMaxMilliamps = ROVER_LED_MAX_MILLIAMPS;
 
 /// @brief Half-period of the red link-down blink, in milliseconds.
 constexpr unsigned long kLedBlinkIntervalMs = 2000UL;
@@ -178,9 +221,16 @@ constexpr unsigned long kLedBlinkIntervalMs = 2000UL;
 /// @brief Bytes of header preceding the colour data in an incoming LED frame.
 constexpr size_t kLedFrameHeaderBytes = 4;
 
-/// @brief Smallest acceptable incoming LED frame: header plus one 32-bit colour
-///        per LED, low 24 bits used, BGR order.
-constexpr size_t kLedFrameBytes = kLedFrameHeaderBytes + (kNumLeds * sizeof(uint32_t));
+/// @brief A full-size incoming LED frame: header plus one 32-bit colour per LED,
+///        low 24 bits used, BGR order.
+/// @note Not a minimum. Shorter frames are accepted and paint as far as they
+///       reach; see LedController::submit_frame().
+constexpr size_t kLedFrameBytes =
+    kLedFrameHeaderBytes + (static_cast<size_t>(kNumLeds) * sizeof(uint32_t));
+
+/// @brief Shortest frame that still carries one colour, and so the length below
+///        which an incoming packet is rejected outright.
+constexpr size_t kLedMinFrameBytes = kLedFrameHeaderBytes + sizeof(uint32_t);
 
 /* --------------------------------------------------------------------------
  * Nextion display

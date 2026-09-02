@@ -52,6 +52,9 @@ void setup()
 {
     Serial.begin(config::kSerialBaud);
 
+    pinMode(2, OUTPUT);
+    digitalWrite(2, HIGH);
+    
     ROVER_LOG_BEGIN();
     ROVER_LOGLN("Rover controller starting (BMS BLE + Nextion + UDP + LED)...");
 
@@ -82,9 +85,6 @@ void setup()
         // Runs on the NimBLE host task: hand the bytes over, decode on the loop.
         gPoller.on_ble_rx(data, length);
     });
-
-    pinMode(2, OUTPUT);
-    digitalWrite(2, HIGH);
 }
 
 void loop()

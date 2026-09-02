@@ -6,6 +6,36 @@
 
 #include "config.hpp"
 
+/// @brief Strip chipset, as a FastLED chipset name.
+/// @note APA102 (the default) is clocked: it needs both config::kLedDataPin and
+///       config::kLedClockPin, and the strip has four pads -- 5V, GND, DI, CI.
+///       A three-pad strip -- 5V, GND, DIN -- is single-wire instead: set
+///       ROVER_LED_CLOCKLESS=1, ROVER_LED_CHIPSET=WS2812B and
+///       ROVER_LED_COLOR_ORDER=GRB, and the clock pin goes unused. Feeding a
+///       single-wire strip a clocked bitstream lights only a few leading pixels,
+///       which is the first thing to rule out when the strip is short of LEDs.
+#ifndef ROVER_LED_CHIPSET
+#define ROVER_LED_CHIPSET APA102
+#endif
+
+/// @brief Byte order the chipset expects. BGR for APA102, GRB for WS2812B.
+#ifndef ROVER_LED_COLOR_ORDER
+#define ROVER_LED_COLOR_ORDER BGR
+#endif
+
+/// @brief 1 for a single-wire chipset, which takes no clock pin.
+#ifndef ROVER_LED_CLOCKLESS
+#define ROVER_LED_CLOCKLESS 0
+#endif
+
+/// @brief Boot-time strip diagnostic. See run_self_test().
+/// @note 0 -- off. 1 -- chase then dim fill, then carry on into loop(). 2 --
+///       repeat one frame forever for a scope to trigger on; the board never
+///       reaches loop(), so nothing else touches the strip while probing.
+#ifndef ROVER_LED_SELFTEST
+#define ROVER_LED_SELFTEST 1
+#endif
+
 namespace led_controller
 {
 
@@ -59,9 +89,15 @@ public:
 
     /// @brief Stage an incoming UDP colour frame.
     /// @param data Raw packet bytes: a header followed by one 32-bit colour per
-    ///        LED, low 24 bits used, BGR order.
-    /// @param len Packet length; must be at least config::kLedFrameBytes.
+    ///        LED, low 24 bits used, in ROVER_LED_COLOR_ORDER.
+    /// @param len Packet length; must be at least config::kLedMinFrameBytes.
     /// @return true if the frame was staged, false if rejected or dropped.
+    /// @note The frame need not carry config::kNumLeds colours. A short frame
+    ///       paints as far as it reaches and leaves the rest of the strip dark;
+    ///       colours past the end of the strip are ignored. Requiring an exact
+    ///       length instead would mean every change to ROVER_NUM_LEDS silently
+    ///       dropped every frame from a sender that had not been changed to
+    ///       match, freezing the strip on its last colour.
     /// @note Safe to call from the AsyncUDP task. Does not touch FastLED.
     bool submit_frame(const uint8_t *data, size_t len);
 
@@ -74,6 +110,12 @@ private:
 
     /// @brief Advance and draw the link-down blink.
     void render_link_status();
+
+#if ROVER_LED_SELFTEST
+    /// @brief Blocking boot-time diagnostic that separates a data-path fault
+    ///        from a power fault. See the definition for how to read it.
+    void run_self_test();
+#endif
 
     /// @brief Push a buffer of packed colours to the strip.
     void show_colors(const uint32_t *colors);
