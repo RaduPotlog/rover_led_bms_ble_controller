@@ -29,12 +29,13 @@ cp core/include/config_local.hpp.example core/include/config_local.hpp
 Without it the firmware still builds; it just will not associate. Also set
 `bms_udp_dest_ip()` and `kBmsMacAddress` in `config.hpp` to match your deployment.
 
-> **Subnet warning.** The two source projects targeted different networks, and
-> their addresses were never mutually reachable: BMS telemetry goes to
-> `192.168.1.201`, the LED board's static address was `192.168.99.101/24`, and the
-> configured SSID hands out a third range over DHCP. On one board these must
-> agree. Until they do, telemetry leaves the board and is dropped by the first
-> router. `config.hpp` lists them together so the mismatch is visible.
+> **Subnet warning.** The board claims a static `192.168.77.201/24`
+> (`ROVER_WIFI_USE_STATIC_IP=1`), but BMS telemetry still goes to
+> `192.168.1.201` — not a reachable address from that subnet. Both must sit on the
+> network the configured SSID serves. Point `bms_udp_dest_ip()` at the telemetry
+> host's `192.168.77.0/24` address (not `.201`, which the board itself now holds).
+> Until then telemetry leaves the board and is dropped by the first router.
+> `config.hpp` lists them together so the mismatch is visible.
 
 Build flags in `platformio.ini` control the rest:
 
@@ -42,7 +43,7 @@ Build flags in `platformio.ini` control the rest:
 |---|---|---|
 | `ROVER_DEBUG` | `1` | `0` compiles logging out (keeps the Nextion UART clean), `1` logs to `Serial`/UART0 alongside the display, `2` logs to `Serial1` on a separate debug UART |
 | `ROVER_DEBUG_BMS` | `0` | `1` adds a per-frame dump of every decoded BMS response. Chatty: nine frames per poll cycle. Requires `ROVER_DEBUG` to be non-zero |
-| `ROVER_WIFI_USE_STATIC_IP` | `0` | `1` claims the static address block in `config.hpp` instead of using DHCP |
+| `ROVER_WIFI_USE_STATIC_IP` | `1` | `1` claims the static address block in `config.hpp` instead of using DHCP |
 | `ROVER_NUM_LEDS` | `40` | Length of the LED strip. Every frame buffer, render loop and UDP frame size derives from it |
 | `ROVER_LED_SELFTEST` | `1` | Boot-time strip diagnostic: `0` off, `1` chase then dim fill, `2` repeat one frame forever for a scope — see [Troubleshooting](#only-the-first-few-leds-light) |
 | `ROVER_LED_CHIPSET` | `APA102` | FastLED chipset name. Pair with `ROVER_LED_CLOCKLESS` and `ROVER_LED_COLOR_ORDER` |

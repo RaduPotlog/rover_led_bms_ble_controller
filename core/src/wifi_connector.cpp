@@ -23,8 +23,6 @@ void WifiConnector::got_ip_callback(WiFiEvent_t event, WiFiEventInfo_t info)
     ROVER_LOGLN("WiFi connected");
     ROVER_LOGLN("IP address: ");
     ROVER_LOGLN(WiFi.localIP());
-    ROVER_LOGLN("Hw: ");
-    ROVER_LOGLN(WiFi.macAddress());
 
     is_wifi_connected_ = true;
 }
@@ -82,6 +80,12 @@ void WifiConnector::connect(
     WiFi.onEvent(got_ip_callback, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
     WiFi.onEvent(disconnected_callback, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
     WiFi.mode(WIFI_STA);
+
+    // Printed here rather than on the got-IP event so that it appears even when
+    // the AP is unreachable -- this is the address a DHCP reservation is keyed
+    // on, and it is needed most when the board is not associating.
+    ROVER_LOG("WiFi MAC: ");
+    ROVER_LOGLN(WiFi.macAddress());
 
     if (use_static_ip_) {
         if (!WiFi.config(static_ip_, gateway_, subnet_, dns1_, dns2_)) {

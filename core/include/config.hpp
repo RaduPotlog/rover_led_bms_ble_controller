@@ -82,9 +82,9 @@ constexpr unsigned long kWifiReconnectMs = 5000UL;
 
 #if ROVER_WIFI_USE_STATIC_IP
 /// @brief Static address to claim when ROVER_WIFI_USE_STATIC_IP is enabled.
-inline IPAddress static_ip()  { return IPAddress(192, 168, 99, 101); }
+inline IPAddress static_ip()  { return IPAddress(192, 168, 77, 201); }
 /// @brief Default gateway used with static_ip().
-inline IPAddress gateway()    { return IPAddress(192, 168, 99, 1); }
+inline IPAddress gateway()    { return IPAddress(192, 168, 77, 1); }
 /// @brief Subnet mask used with static_ip().
 inline IPAddress subnet()     { return IPAddress(255, 255, 255, 0); }
 /// @brief Primary DNS server used with static_ip().
@@ -96,12 +96,12 @@ inline IPAddress dns2()       { return IPAddress(8, 8, 4, 4); }
 /* --------------------------------------------------------------------------
  * UDP
  * --------------------------------------------------------------------------
- * WARNING: as inherited, these three addresses sit on mutually unreachable
- * subnets -- the BMS telemetry target is on 192.168.1.0/24, the LED controller's
- * static address was on 192.168.99.0/24, and the WiFi network above hands out a
- * third range over DHCP. On one board they must agree. Fix bms_udp_dest_ip() (and
- * static_ip(), if enabled) to match the network in kWifiSsid before deploying.
- * Until they do, telemetry leaves the board and is dropped by the first router.
+ * WARNING: the board now claims a static 192.168.77.201/24 (see static_ip()),
+ * but the BMS telemetry target below is still on 192.168.1.0/24. The two must sit
+ * on the same subnet as the network in kWifiSsid. Point bms_udp_dest_ip() at the
+ * telemetry host's address on 192.168.77.0/24 -- and not at .201, which the board
+ * itself now holds -- before deploying. Until then telemetry leaves the board and
+ * is dropped by the first router.
  */
 
 /// @brief Port the BMS telemetry socket binds to and sends from.
