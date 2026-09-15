@@ -82,6 +82,13 @@ void LedController::set_mode(Mode mode)
 
     if (mode_ == Mode::Udp) {
         blue_flash_pending_ = true;
+        showing_idle_ = false;
+
+        // Start the frame timeout from the link-up edge, not from whatever frame
+        // was last seen before the link dropped.
+        portENTER_CRITICAL(&staging_mux_);
+        last_frame_ms_ = millis();
+        portEXIT_CRITICAL(&staging_mux_);
         return;
     }
 
@@ -126,6 +133,7 @@ bool LedController::submit_frame(const uint8_t *data, size_t len)
     // put there, so what reaches the strip is always the frame that arrived.
     memset(staged_ + used, 0, (static_cast<size_t>(config::kNumLeds) - used) * sizeof(uint32_t));
     frame_pending_ = true;
+    last_frame_ms_ = millis();
     portEXIT_CRITICAL(&staging_mux_);
 
     return true;
@@ -143,12 +151,11 @@ void LedController::poll()
     }
 
     if (blue_flash_pending_) {
+        // The link-up blue is also the no-data state, so it simply stays until
+        // the first frame arrives.
         blue_flash_pending_ = false;
+        showing_idle_ = true;
         show_solid(kColorBlue);
-        return;
-    }
-
-    if (!frame_pending_) {
         return;
     }
 
@@ -156,13 +163,32 @@ void LedController::poll()
     // section is a fixed-size memcpy of the frame buffer and never spans the SPI
     // write.
     uint32_t frame[config::kNumLeds];
+    bool have_frame = false;
+    unsigned long last_frame_ms = 0;
 
     portENTER_CRITICAL(&staging_mux_);
-    memcpy(frame, staged_, sizeof(frame));
-    frame_pending_ = false;
+    if (frame_pending_) {
+        memcpy(frame, staged_, sizeof(frame));
+        frame_pending_ = false;
+        have_frame = true;
+    }
+    last_frame_ms = last_frame_ms_;
     portEXIT_CRITICAL(&staging_mux_);
 
-    show_colors(frame);
+    if (have_frame) {
+        showing_idle_ = false;
+        show_colors(frame);
+        return;
+    }
+
+    // No frame for a while: the sender stopped or the link is dead even though
+    // WiFi still reports connected. Go back to the no-data blue rather than
+    // holding the last frame indefinitely.
+    if (!showing_idle_ && (millis() - last_frame_ms) >= config::kLedFrameTimeoutMs) {
+        ROVER_LOGLN("LED frames timed out, showing no-data state");
+        showing_idle_ = true;
+        show_solid(kColorBlue);
+    }
 }
 
 void LedController::render_link_status()

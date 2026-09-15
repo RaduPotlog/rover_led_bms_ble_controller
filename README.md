@@ -146,9 +146,20 @@ iteration, gated on the UART having room.
 
 While WiFi is down, `LedController` is in `Mode::LinkStatus` and blinks the strip
 red on a 2 s period. On the first successful connect `loop()` switches it to
-`Mode::Udp`, which flashes blue once and then shows incoming frames. If the link
-drops it goes back. Frames that arrive in the wrong mode are dropped rather than
-queued, since they would be stale by the time the mode changed.
+`Mode::Udp`, which shows solid blue until frames arrive and then shows them. If the
+link drops it goes back. Frames that arrive in the wrong mode are dropped rather
+than queued, since they would be stale by the time the mode changed.
+
+If no frame arrives for `kLedFrameTimeoutMs` (1 s) while in `Mode::Udp`, the strip
+goes back to solid blue until frames resume. The WiFi disconnect event alone
+cannot be relied on for this: it fires only after the beacon timeout when the AP
+vanishes, and never when the sender stops or the ROS host drops off the network
+while the board stays associated. The strip therefore never holds a frozen frame.
+
+A lost BMS (BLE) link is deliberately not shown by this firmware, so a flaky BMS
+never hides the rover's signal animations. The telemetry socket sends the no-data
+payload instead; `rover_battery`'s watchdog expires, and `rover_safety`'s LED tree
+plays the error animation through `rover_led`.
 
 An incoming LED frame is a 4-byte header followed by one `uint32_t` per LED, low
 24 bits used, in `ROVER_LED_COLOR_ORDER`. At the default `ROVER_NUM_LEDS` of 40

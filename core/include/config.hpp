@@ -225,6 +225,16 @@ constexpr uint32_t kLedMaxMilliamps = ROVER_LED_MAX_MILLIAMPS;
 /// @brief Half-period of the red link-down blink, in milliseconds.
 constexpr unsigned long kLedBlinkIntervalMs = 2000UL;
 
+/// @brief How long the strip may go without an incoming UDP frame before it
+///        drops back to the solid blue "link up, no LED data" state, in
+///        milliseconds.
+/// @note rover_led sends continuously at its controller_frequency (50 Hz by
+///       default), even when the animation is unchanged, so 1 s is about fifty
+///       missed frames -- the sender has stopped or the link is dead. Without
+///       this the strip held the last frame for as long as the WiFi stack still
+///       believed it was associated, which may be forever.
+constexpr unsigned long kLedFrameTimeoutMs = 1000UL;
+
 /// @brief Bytes of header preceding the colour data in an incoming LED frame.
 constexpr size_t kLedFrameHeaderBytes = 4;
 

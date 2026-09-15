@@ -60,7 +60,8 @@ public:
     enum class Mode
     {
         LinkStatus, ///< loop() drives it: red blink while the link is down.
-        Udp,        ///< Incoming UDP frames drive it.
+        Udp,        ///< Incoming UDP frames drive it; solid blue while none arrive
+                    ///< for config::kLedFrameTimeoutMs.
     };
 
     /// @brief Constructor.
@@ -80,8 +81,9 @@ public:
 
     /// @brief Choose who owns the strip.
     /// @param mode The new mode.
-    /// @note Switching to Udp flashes the strip blue once, as the standalone LED
-    ///       firmware did on the link-up edge.
+    /// @note Switching to Udp paints the strip blue, as the standalone LED
+    ///       firmware did on the link-up edge, and it stays blue until the first
+    ///       frame arrives.
     void set_mode(Mode mode);
 
     /// @brief The current mode.
@@ -135,13 +137,21 @@ private:
     /// @brief Whether staged_ holds a frame poll() has not shown yet.
     volatile bool frame_pending_{false};
 
+    /// @brief millis() of the last frame staged by the UDP task, or of the switch
+    ///        into Udp mode. Guarded by staging_mux_.
+    unsigned long last_frame_ms_{0};
+
+    /// @brief Whether the strip is showing the no-data blue rather than a frame.
+    /// @note Loop task only. Keeps poll() from repainting the blue every iteration.
+    bool showing_idle_{false};
+
     /// @brief Who owns the strip.
     Mode mode_{Mode::LinkStatus};
 
     /// @brief Whether begin() has run.
     bool started_{false};
 
-    /// @brief Pending one-shot blue flash for the transition into Udp mode.
+    /// @brief Pending blue paint for the transition into Udp mode.
     bool blue_flash_pending_{false};
 
     /// @brief Forces a repaint of the link-status animation.
