@@ -44,6 +44,20 @@ static ui::NextionView gView(gNexDisplay, Serial);
 /// @brief Outbound telemetry payload.
 static uint8_t gTelemetryBuf[telemetry::BmsTelemetryCodec::kPacketSize];
 
+/// @brief Decoder frame count at the end of the previous poll cycle.
+static uint32_t gFramesAtLastCycle = 0;
+
+/// @brief millis() of the last "no BMS data" packet sent while BLE was down.
+static unsigned long gLastNoDataMs = 0;
+
+/// @brief Send the all-zero "no BMS data" payload.
+/// @note rover_battery recognises it and does not decode it as a reading.
+static void send_no_bms_data()
+{
+    memset(gTelemetryBuf, 0, sizeof(gTelemetryBuf));
+    gBmsUdp.send(gTelemetryBuf, sizeof(gTelemetryBuf));
+}
+
 /* ==========================================================================
  * Arduino entry points
  * ========================================================================== */
@@ -116,21 +130,29 @@ void loop()
     gPoller.poll();
 
     if (gPoller.take_cycle_complete()) {
+        // A cycle without a single decoded frame means the BMS stopped answering
+        // while the link stayed up; BmsData then only holds old values.
+        const uint32_t frames = gDaly.decoded_frame_count();
+        const bool fresh = (frames != gFramesAtLastCycle);
+        gFramesAtLastCycle = frames;
+
         size_t length = 0;
 
-        if (ble_up) {
+        if (ble_up && fresh) {
             length = telemetry::BmsTelemetryCodec::serialize(
                 gDaly.get_data(), gDaly.get_alarm(), gTelemetryBuf, sizeof(gTelemetryBuf));
         }
 
-        if (length == 0) {
-            // Keep the packet cadence steady when the BMS is unreachable, but send
-            // an unambiguously empty payload rather than stale readings.
-            memset(gTelemetryBuf, 0, sizeof(gTelemetryBuf));
-            length = sizeof(gTelemetryBuf);
+        if (length > 0) {
+            gBmsUdp.send(gTelemetryBuf, length);
+        } else {
+            // An unambiguously empty payload rather than stale readings.
+            send_no_bms_data();
         }
-
-        gBmsUdp.send(gTelemetryBuf, length);
+    } else if (!ble_up && (millis() - gLastNoDataMs) >= config::kBmsNoDataHeartbeatMs) {
+        // The poller completes no cycles while BLE is down, so keep the cadence here.
+        gLastNoDataMs = millis();
+        send_no_bms_data();
     }
 
     /* --- display -------------------------------------------------------- */

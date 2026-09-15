@@ -67,7 +67,10 @@ public:
 
     /**
      * @brief get struct holds all the data collected from the BMS
-     * @details Comments specify precision and units where applicable
+     * @details Comments give the units after decoding: the raw Daly units (0.1 V,
+     *          0.1 A with 30000 offset, 0.1 %, +40 °C offset) are converted in the
+     *          get_*() parsers. rover_battery (ROS 2) mirrors this layout in
+     *          rover_battery/domain/bms_frame.hpp -- change both together.
      */
     ROVER_PACK_BEGIN
     struct BmsData
@@ -75,21 +78,21 @@ public:
         // Pack the variables directly into matching memory slices
         struct {
             // data from 0x90
-            float packVoltage; // Total pack voltage (0.1 V)
-            float packCurrent; // Current in (+) or out (-) of pack (0.1 A)
-            float packSOC;     // State Of Charge
+            float packVoltage; // Total pack voltage (V)
+            float packCurrent; // Current in (+, charging) or out (-, discharging) of pack (A)
+            float packSOC;     // State Of Charge (%, 0-100)
 
             // data from 0x91
             float maxCellmV; // Maximum cell voltage (mV)
             int maxCellVNum; // Number of cell with highest voltage
             float minCellmV; // Minimum cell voltage (mV)
             int minCellVNum; // Number of cell with lowest voltage
-            float cellDiff;  // Difference between min and max cell voltages
+            float cellDiff;  // Difference between min and max cell voltages (mV)
 
             // data from 0x92
             float tempMax;      // Maximum temperature sensor reading (°C)
             float tempMin;      // Minimum temperature sensor reading (°C)
-            float tempAverage;  // Average of temp sensors
+            float tempAverage;  // (tempMax + tempMin) / 2 (°C)
 
             // data from 0x93
             int chargeDischargeStatus;    // charge/discharge status (0 stationary, 1 charge, 2 discharge)
@@ -288,6 +291,16 @@ public:
         return get.disChargeFetState;     
     }
 
+    /// @brief Number of valid frames decoded since construction.
+    /// @note Lets the caller tell fresh data from a BMS that stopped answering while
+    ///       the BLE link stays up: if the count did not move over a whole poll
+    ///       cycle, BmsData only holds old values. Wraps harmlessly; compare for
+    ///       inequality, not order.
+    uint32_t decoded_frame_count() const
+    {
+        return decoded_frame_count_;
+    }
+
     /// @brief Number of 0x95 frames needed to assemble a full set of cell voltages.
     /// @note Derived from the cell count reported by 0x94. Exposed for tests.
     int get_expected_frame_count() const
@@ -374,6 +387,9 @@ private:
     bool frame_received_[16]{};
 
     int frames_received_count_{0};
+
+    /// @brief See decoded_frame_count().
+    uint32_t decoded_frame_count_{0};
 
     bool assembled_{false};
 

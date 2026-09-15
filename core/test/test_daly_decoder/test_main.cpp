@@ -497,6 +497,50 @@ void test_codec_alarm_bits_land_in_the_right_bytes()
     CHECK_EQ(0x04, alarm_bytes[6]);
 }
 
+/* --- freshness ------------------------------------------------------------ */
+
+void test_decoded_frame_count_tracks_valid_frames()
+{
+    daly100_bms::Daly100Bms bms;
+    CHECK_EQ(0, bms.decoded_frame_count());
+
+    const uint8_t p[8] = { 0x02, 0x14, 0x00, 0x00, 0x74, 0xFE, 0x03, 0x57 };
+    feed_frame(bms, 0x90, p);
+    CHECK_EQ(1, bms.decoded_frame_count());
+
+    // A corrupted checksum is not a decoded frame.
+    uint8_t *bad = make_frame(0x90, p);
+    bad[12] ^= 0xFF;
+    bms.decode_response(bad);
+    delete[] bad;
+    CHECK_EQ(1, bms.decoded_frame_count());
+
+    // Nor is garbage fed through the reassembly path.
+    const uint8_t junk[13] = { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                               0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC };
+    bms.feed(junk, sizeof(junk));
+    CHECK_EQ(1, bms.decoded_frame_count());
+}
+
+void test_decoded_frame_count_counts_back_to_back_frames()
+{
+    daly100_bms::Daly100Bms bms;
+
+    const uint8_t p90[8] = { 0x02, 0x14, 0x00, 0x00, 0x74, 0xFE, 0x03, 0x57 };
+    const uint8_t p92[8] = { 0x41, 0x01, 0x3C, 0x02, 0x00, 0x00, 0x00, 0x00 };
+    uint8_t *a = make_frame(0x90, p90);
+    uint8_t *b = make_frame(0x92, p92);
+
+    uint8_t stream[26];
+    memcpy(stream, a, 13);
+    memcpy(stream + 13, b, 13);
+    delete[] a;
+    delete[] b;
+
+    bms.feed(stream, sizeof(stream));
+    CHECK_EQ(2, bms.decoded_frame_count());
+}
+
 struct TestCase {
     const char *name;
     void (*fn)();
@@ -525,6 +569,8 @@ const TestCase kTests[] = {
     { "codec_serializes_full_packet",      test_codec_serializes_full_packet },
     { "codec_rejects_short_buffer",        test_codec_rejects_short_buffer },
     { "codec_alarm_bits_placement",        test_codec_alarm_bits_land_in_the_right_bytes },
+    { "decoded_frame_count_valid_only",    test_decoded_frame_count_tracks_valid_frames },
+    { "decoded_frame_count_back_to_back",  test_decoded_frame_count_counts_back_to_back_frames },
 };
 
 } // namespace

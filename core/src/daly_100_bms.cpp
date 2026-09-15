@@ -397,6 +397,8 @@ void Daly100Bms::decode_response(const uint8_t *frame)
         return;
     }
 
+    ++decoded_frame_count_;
+
     uint8_t cmd  = frame[2];
     const uint8_t *payload = frame + 4; // payload[0..7]
 
@@ -410,7 +412,7 @@ void Daly100Bms::decode_response(const uint8_t *frame)
             ROVER_LOGLN("Basic Status Info: Voltage, Current, SOC");
             ROVER_LOGLN("------------------------------------------------");
             ROVER_LOGF("Total Voltage: %.1f V\n", get.packVoltage);
-            ROVER_LOGF("Current: %.1f mA\n", get.packCurrent);
+            ROVER_LOGF("Current: %.1f A\n", get.packCurrent);
             ROVER_LOGF("SOC: %.1f %%\n", get.packSOC);
             ROVER_LOGLN("===============================================");
 #endif
@@ -424,9 +426,9 @@ void Daly100Bms::decode_response(const uint8_t *frame)
             ROVER_LOGLN("===============================================");
             ROVER_LOGLN("Min/Max Cell Voltage Info:");
             ROVER_LOGLN("------------------------------------------------");
-            ROVER_LOGF("MaxCell %d: %.3f V\n", get.maxCellVNum, get.maxCellmV);
-            ROVER_LOGF("MinCell %d: %.3f V\n", get.minCellVNum, get.minCellmV);
-            ROVER_LOGF("Voltage Difference: %fV\n", get.cellDiff);
+            ROVER_LOGF("MaxCell %d: %.0f mV\n", get.maxCellVNum, get.maxCellmV);
+            ROVER_LOGF("MinCell %d: %.0f mV\n", get.minCellVNum, get.minCellmV);
+            ROVER_LOGF("Voltage Difference: %.0f mV\n", get.cellDiff);
             ROVER_LOGLN("===============================================");
 #endif
             break;

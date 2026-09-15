@@ -115,6 +115,13 @@ inline IPAddress bms_udp_dest_ip() { return IPAddress(192, 168, 1, 201); }
 ///       sending from and to the same port number.
 constexpr int kBmsUdpDestPort = 4444;
 
+/// @brief Gap between "no BMS data" telemetry packets while the BLE link is down,
+///        in milliseconds.
+/// @note The payload is all zero bytes; rover_battery ignores it, so a lost BMS
+///       still ends in its watchdog state. Sending it keeps the UDP path visibly
+///       alive (udp_driver, packet counters) while the BMS is unreachable.
+constexpr unsigned long kBmsNoDataHeartbeatMs = 1000UL;
+
 /// @brief Port the LED socket listens on for incoming colour frames.
 constexpr int kLedUdpPort = 3333;
 
