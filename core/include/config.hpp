@@ -4,10 +4,8 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 
-/// @brief Deployment configuration for the combined rover controller firmware.
+/// @brief Deployment configuration for the rover LED controller firmware.
 /// @note This is the single place to edit when moving the board between networks.
-///       Everything here was previously hardcoded across main.cpp, udp_connection.cpp,
-///       wifi_connector.cpp, the BLE sources and led_controller.hpp.
 ///
 /// @warning These are deliberately typed constants rather than #defines. FastLED
 ///          uses DATA_PIN and CLOCK_PIN as its own template parameter names, so
@@ -24,25 +22,18 @@ namespace config
 {
 
 /* --------------------------------------------------------------------------
- * Serial / Nextion display
- * --------------------------------------------------------------------------
- * The Nextion HMI shares UART0 with the USB serial console, so this baud rate
- * applies to both. It must match monitor_speed in platformio.ini and the baud
- * rate configured in the Nextion Editor project.
- */
+ * Serial
+ * -------------------------------------------------------------------------- */
 
-/// @brief Baud rate of UART0, shared by the Nextion display and the debug console.
-constexpr unsigned long kSerialBaud = 9600UL;
+/// @brief Baud rate of UART0, which carries the debug console alone.
+/// @note Must match monitor_speed in platformio.ini. This was 9600 while a
+///       Nextion HMI shared the port at the rate its Editor project was built
+///       for; with no display on the line there is nothing to hold it down.
+constexpr unsigned long kSerialBaud = 115200UL;
 
 /* --------------------------------------------------------------------------
  * WiFi
- * --------------------------------------------------------------------------
- * NOTE: the two source projects used different networks -- the BMS controller
- * joined "ROVER-A1-001-2.4GHz" over DHCP while the LED controller took a static
- * 192.168.99.101/24. A single firmware can only join one network, so the BMS
- * network is the default here. See the UDP block below for the matching subnet
- * caveat.
- */
+ * -------------------------------------------------------------------------- */
 
 /* Credentials live in config_local.hpp, which is git-ignored. Copy
  * config_local.hpp.example next to it and fill in your network.
@@ -96,75 +87,12 @@ inline IPAddress dns2()       { return IPAddress(8, 8, 4, 4); }
 /* --------------------------------------------------------------------------
  * UDP
  * --------------------------------------------------------------------------
- * WARNING: the board now claims a static 192.168.77.201/24 (see static_ip()),
- * but the BMS telemetry target below is still on 192.168.1.0/24. The two must sit
- * on the same subnet as the network in kWifiSsid. Point bms_udp_dest_ip() at the
- * telemetry host's address on 192.168.77.0/24 -- and not at .201, which the board
- * itself now holds -- before deploying. Until then telemetry leaves the board and
- * is dropped by the first router.
+ * One socket, receive-only. It must sit on the same subnet as the host running
+ * rover_led, which is the network kWifiSsid names.
  */
-
-/// @brief Port the BMS telemetry socket binds to and sends from.
-constexpr int kBmsUdpPort = 4444;
-
-/// @brief Host that receives the serialized BMS data and alarm payload.
-inline IPAddress bms_udp_dest_ip() { return IPAddress(192, 168, 1, 201); }
-
-/// @brief Port on bms_udp_dest_ip() that telemetry is sent to.
-/// @note Kept equal to kBmsUdpPort, which is what the original firmware did by
-///       sending from and to the same port number.
-constexpr int kBmsUdpDestPort = 4444;
-
-/// @brief Gap between "no BMS data" telemetry packets while the BLE link is down,
-///        in milliseconds.
-/// @note The payload is all zero bytes; rover_battery ignores it, so a lost BMS
-///       still ends in its watchdog state. Sending it keeps the UDP path visibly
-///       alive (udp_driver, packet counters) while the BMS is unreachable.
-constexpr unsigned long kBmsNoDataHeartbeatMs = 1000UL;
 
 /// @brief Port the LED socket listens on for incoming colour frames.
 constexpr int kLedUdpPort = 3333;
-
-/* --------------------------------------------------------------------------
- * BLE / Daly BMS
- * -------------------------------------------------------------------------- */
-
-/// @brief Name this device advertises itself under when initialising NimBLE.
-constexpr const char *kBleDeviceName = "daly100-ble-controller";
-
-/// @brief MAC address of the target Daly BMS. Update to match your pack.
-/// @note Compared lowercased, so keep it lowercase.
-constexpr const char *kBmsMacAddress = "50:19:02:01:32:3e";
-
-/// @brief UUID of the BMS main service.
-constexpr const char *kServiceUuidMain = "0000fff0-0000-1000-8000-00805f9b34fb";
-
-/// @brief UUID of the characteristic the BMS notifies on (BMS -> host).
-constexpr const char *kCharUuidTx = "0000fff1-0000-1000-8000-00805f9b34fb";
-
-/// @brief UUID of the characteristic commands are written to (host -> BMS).
-constexpr const char *kCharUuidRx = "0000fff2-0000-1000-8000-00805f9b34fb";
-
-/// @brief Gap between consecutive BMS commands, in milliseconds.
-/// @note The nine-command cycle therefore takes about 900 ms, matching the
-///       original firmware's cadence -- but as a deadline rather than a delay().
-constexpr unsigned long kBmsCommandIntervalMs = 100UL;
-
-/// @brief Minimum gap between BLE connection attempts, in milliseconds.
-/// @note Without this the now non-blocking loop would retry thousands of times a
-///       second while the BMS is unreachable.
-constexpr unsigned long kBleConnectRetryMs = 2000UL;
-
-/// @brief Capacity of the buffer holding notified BLE bytes until loop() decodes
-///        them, in bytes.
-/// @note Sized for well over a full nine-command cycle of 13-byte responses, so a
-///       momentarily slow loop() iteration cannot lose frames.
-constexpr size_t kBleRxStreamBytes = 512;
-
-/// @brief Consecutive failed connects before the cached address is discarded.
-/// @note Guards against retrying an address forever after the BMS has gone away
-///       or come back with a different one.
-constexpr uint8_t kBleMaxFailedConnects = 3;
 
 /* --------------------------------------------------------------------------
  * LED strip
@@ -248,16 +176,6 @@ constexpr size_t kLedFrameBytes =
 /// @brief Shortest frame that still carries one colour, and so the length below
 ///        which an incoming packet is rejected outright.
 constexpr size_t kLedMinFrameBytes = kLedFrameHeaderBytes + sizeof(uint32_t);
-
-/* --------------------------------------------------------------------------
- * Nextion display
- * -------------------------------------------------------------------------- */
-
-/// @brief Free space required in the UART TX buffer before writing a field.
-/// @note At 9600 baud a field update is around 30 bytes and takes ~30 ms to
-///       clock out. Checking for room instead of calling delay() is what lets
-///       loop() stay non-blocking.
-constexpr size_t kNextionMinTxFree = 64;
 
 } // namespace config
 

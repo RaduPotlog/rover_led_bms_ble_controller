@@ -4,26 +4,13 @@
 #include <Arduino.h>
 
 /// @brief Debug logging sink.
-/// @note   0 -- logging compiled out entirely. Use this to keep UART0 clean for
-///              the Nextion display, which shares that port.
-///         1 -- log to Serial (UART0). This is the default and matches the
-///              behaviour of the original BMS firmware, where debug text and
-///              Nextion commands shared one line. The display ignores anything
-///              not terminated by 0xFF 0xFF 0xFF, so the two coexist, noisily.
-///         2 -- log to Serial1 on a separate debug UART, leaving UART0 for the
-///              display alone. Requires wiring; see ROVER_LOG_RX/TX_PIN below.
+/// @note   0 -- logging compiled out entirely.
+///         1 -- log to Serial (UART0), which this firmware uses for nothing
+///              else. This is the default.
+///         2 -- log to Serial1 on a separate debug UART, leaving UART0 free.
+///              Requires wiring; see ROVER_LOG_RX/TX_PIN below.
 #ifndef ROVER_DEBUG
 #define ROVER_DEBUG 1
-#endif
-
-/// @brief Per-frame BMS decode logging, off by default.
-/// @note This replaces PRINT_LOGS, which was never defined anywhere -- every
-///       diagnostic block in daly_100_bms.cpp was therefore dead code. It is a
-///       separate switch from ROVER_DEBUG because it is extremely chatty: one
-///       block per decoded frame, nine frames per poll cycle. Setting it to 1
-///       has no effect unless ROVER_DEBUG is also non-zero.
-#ifndef ROVER_DEBUG_BMS
-#define ROVER_DEBUG_BMS 0
 #endif
 
 #if ROVER_DEBUG == 2

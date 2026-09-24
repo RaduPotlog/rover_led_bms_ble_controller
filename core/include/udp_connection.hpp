@@ -12,13 +12,12 @@ namespace connector
 
 /// @brief A UDP socket bound to one port, layered on top of a ConnectorInterface.
 ///
-/// @note Instantiate one per port. The combined firmware runs two: one for BMS
-///       telemetry out and one for incoming LED colour frames.
+/// @note Instantiate one per port. This firmware runs a single instance, bound
+///       to config::kLedUdpPort for incoming LED colour frames.
 ///
-///       The send destination is supplied by the owner via set_destination().
-///       It used to be read straight out of config::kBmsUdpDestIp, which meant
-///       this general-purpose class knew about the BMS, and the LED instance
-///       carried a destination it could never sensibly use.
+///       The send destination is supplied by the owner via set_destination()
+///       rather than read out of config, so this class stays general-purpose. A
+///       receive-only socket simply never calls it, and send() then refuses.
 class UdpConnection
 {
 

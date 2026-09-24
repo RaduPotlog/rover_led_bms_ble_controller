@@ -1,20 +1,16 @@
-# rover_controller
+# rover_led_controller
 
-Combined ESP32 firmware for the rover, merging what were two separate PlatformIO
-projects (`rover_bms_ble_controller` and `rover_led_udp_controller`) into a single
-binary running on one board.
+ESP32 firmware driving a UDP-fed APA102 LED strip for the rover.
 
-It does four jobs at once:
+It does one job: listen on a UDP port for colour frames and paint them onto the
+strip, with a local red-blink / solid-blue link-status animation for when there
+is nothing to paint.
 
-- **BMS over BLE** — NimBLE client to a Daly 100 BMS, polling nine commands
-  (`0x90`–`0x98`) and decoding the 13-byte `0xA5` frame stream.
-- **Nextion HMI** — pack voltage, current, temperature, SOC, charge/discharge
-  state, and WiFi/BLE/MOSFET status icons on UART0.
-- **UDP telemetry out** — serialized `BmsData` + a 7-byte packed `Alarm` bitfield,
-  sent once per BMS poll cycle to a configured host.
-- **UDP-driven LED strip** — a 24-LED APA102 strip taking its colours from
-  incoming UDP frames, with a local red-blink / blue-flash link-status animation
-  while WiFi is down.
+This is the LED-only branch. `master` carries the combined `rover_controller`
+firmware, which also runs a BLE client to a Daly 100 BMS, a Nextion HMI, and a
+second UDP socket for BMS telemetry. Stripping those out leaves the 2.4 GHz radio
+to WiFi alone — the BLE polling traffic on `master` adds jitter to UDP frame
+timing — and leaves UART0 to the debug console alone.
 
 ## Configure before flashing
 
@@ -26,23 +22,18 @@ live in **`core/include/config_local.hpp`**, which is git-ignored — copy
 cp core/include/config_local.hpp.example core/include/config_local.hpp
 ```
 
-Without it the firmware still builds; it just will not associate. Also set
-`bms_udp_dest_ip()` and `kBmsMacAddress` in `config.hpp` to match your deployment.
+Without it the firmware still builds; it just will not associate.
 
-> **Subnet warning.** The board claims a static `192.168.77.201/24`
-> (`ROVER_WIFI_USE_STATIC_IP=1`), but BMS telemetry still goes to
-> `192.168.1.201` — not a reachable address from that subnet. Both must sit on the
-> network the configured SSID serves. Point `bms_udp_dest_ip()` at the telemetry
-> host's `192.168.77.0/24` address (not `.201`, which the board itself now holds).
-> Until then telemetry leaves the board and is dropped by the first router.
-> `config.hpp` lists them together so the mismatch is visible.
+The board claims a static `192.168.77.201/24` (`ROVER_WIFI_USE_STATIC_IP=1`). The
+host running `rover_led` must be on that same network — the one the configured
+SSID serves. Set `ROVER_WIFI_USE_STATIC_IP=0` to take an address over DHCP
+instead; the LED socket only receives, so it needs no fixed address of its own.
 
 Build flags in `platformio.ini` control the rest:
 
 | Flag | Default | Effect |
 |---|---|---|
-| `ROVER_DEBUG` | `1` | `0` compiles logging out (keeps the Nextion UART clean), `1` logs to `Serial`/UART0 alongside the display, `2` logs to `Serial1` on a separate debug UART |
-| `ROVER_DEBUG_BMS` | `0` | `1` adds a per-frame dump of every decoded BMS response. Chatty: nine frames per poll cycle. Requires `ROVER_DEBUG` to be non-zero |
+| `ROVER_DEBUG` | `1` | `0` compiles logging out, `1` logs to `Serial`/UART0, `2` logs to `Serial1` on a separate debug UART |
 | `ROVER_WIFI_USE_STATIC_IP` | `1` | `1` claims the static address block in `config.hpp` instead of using DHCP |
 | `ROVER_NUM_LEDS` | `40` | Length of the LED strip. Every frame buffer, render loop and UDP frame size derives from it |
 | `ROVER_LED_SELFTEST` | `1` | Boot-time strip diagnostic: `0` off, `1` chase then dim fill, `2` repeat one frame forever for a scope — see [Troubleshooting](#only-the-first-few-leds-light) |
@@ -53,46 +44,37 @@ Build flags in `platformio.ini` control the rest:
 | `ROVER_LED_BRIGHTNESS` | `255` | Global FastLED brightness. Lowering it tells a power limit from a data limit |
 | `ROVER_LED_MAX_MILLIAMPS` | `0` | Current budget at 5 V; FastLED scales brightness to fit. `0` disables the cap. Off by default so it cannot mask an under-fed strip |
 
-### A note on UART0
-
-The Nextion display and the debug console share UART0 at **9600 baud**. This is
-inherited behaviour — the display ignores anything not terminated by
-`0xFF 0xFF 0xFF`, so debug text and display commands coexist, noisily. Set
-`ROVER_DEBUG=0` for a clean display line, or `ROVER_DEBUG=2` to move logs onto
-their own UART.
-
 ## Build and flash
 
 ```sh
 cd core
-pio run                       # build
-pio run --target upload       # flash
-pio device monitor -b 9600    # console
+pio run                         # build
+pio run --target upload         # flash
+pio device monitor -b 115200    # console
 ```
 
-A healthy boot logs the WiFi banner and IP, `UDP listening on port 4444`,
-`UDP listening on port 3333`, and `Subscription success` once the BLE client has
-attached to the BMS.
+A healthy boot logs the startup banner, the WiFi banner with the board's IP, and
+`UDP listening on port 3333`.
 
-## Tests
+## Smoke test
 
-The Daly protocol decoder and the telemetry codec are pure byte-shuffling with no
-hardware dependency, so they are unit-tested on the host against a stub
-`Arduino.h` in `core/test/native_stubs/`. AddressSanitizer is on, because the
-decoder indexes into fixed-size frame payloads and a bounds slip should fail the
-build rather than the pack.
+There are no host unit tests on this branch — the ones on `master` cover only the
+Daly protocol decoder and the BMS telemetry codec, neither of which is built
+here. The frame path is exercised by driving the socket directly instead. From
+any machine on the board's subnet:
 
-```sh
-cd core
-pio test -e native
+```python
+import socket, struct
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+frame = b'\x00\x00\x00\x00' + b''.join(struct.pack('<I', 0x00FF0000) for _ in range(40))
+while True:
+    s.sendto(frame, ('192.168.77.201', 3333))
 ```
 
-That needs a host GCC on `PATH`. On a Windows box with Visual Studio but no GCC,
-`tools/run_native_tests.ps1` builds and runs the same sources with `cl.exe`:
-
-```sh
-pwsh -File tools/run_native_tests.ps1
-```
+The strip should go solid red and hold it. Stop the sender and it returns to
+solid blue after about a second, logging `LED frames timed out, showing no-data
+state`. Send a short frame — 10 colours instead of 40 — and the first 10 LEDs
+paint while the rest go dark.
 
 ## Layout
 
@@ -104,43 +86,21 @@ core/
 │   ├── logging.hpp             ROVER_LOG* macros and their sink
 │   ├── connector_interface.hpp a link: is_connected() + poll()
 │   ├── wifi_connector.hpp      WiFi station (singleton), optional static IP
-│   ├── udp_connection.hpp      one socket per port; two are instantiated
-│   ├── ble_scanner.hpp         NimBLE scan for the configured BMS
-│   ├── ble_client.hpp          connect, subscribe, reconnect
-│   ├── daly_100_bms.hpp        Daly protocol: reassembly, encode, decode
-│   ├── daly_bms_poller.hpp     non-blocking command cycle
-│   ├── bms_telemetry_codec.hpp the outbound UDP payload
-│   ├── nextion_view.hpp        display rendering, one field at a time
+│   ├── udp_connection.hpp      one socket per port; one is instantiated
 │   └── led_controller.hpp      FastLED APA102 strip
 ├── src/                        matching implementations + main.cpp
-├── test/                       host unit tests and their Arduino stub
-├── tools/                      MSVC fallback test runner
 └── platformio.ini
-resources/                      Nextion .HMI project and its fonts
 ```
-
-`UdpConnection` is instantiated twice — once on port 4444 for telemetry out, once
-on port 3333 for LED frames in. Each holds its own `AsyncUDP`, so no coordination
-is needed between them.
 
 ## Concurrency
 
-Three tasks run concurrently: the Arduino loop task, the NimBLE host task
-(BLE notifications) and the `async_udp` task (incoming packets). Exactly two
-handoffs cross a task boundary, and both are explicit:
+Two tasks run concurrently: the Arduino loop task and the `async_udp` task
+(incoming packets). Exactly one handoff crosses a task boundary, and it is
+explicit: the UDP callback copies a frame into `LedController`'s staging buffer
+under a short critical section, and `LedController::poll()` is the only caller of
+`FastLED.show()`, so the strip has one writer.
 
-- **BLE bytes.** The notification callback pushes raw bytes into a FreeRTOS stream
-  buffer and returns. `DalyBmsPoller::poll()` drains it on the loop task and feeds
-  the decoder there, so decoded BMS state has a single reader and writer and needs
-  no lock.
-- **LED frames.** The UDP callback copies a frame into a staging buffer under a
-  short critical section. `LedController::poll()` is the only caller of
-  `FastLED.show()`, so the strip has one writer.
-
-`loop()` does not block. The BMS command cycle issues one command per iteration
-once `kBmsCommandIntervalMs` has elapsed — the cycle still takes about 900 ms, but
-nothing waits on it — and the display writes at most one changed field per
-iteration, gated on the UART having room.
+`loop()` does not block.
 
 ### LED strip ownership
 
@@ -156,11 +116,6 @@ cannot be relied on for this: it fires only after the beacon timeout when the AP
 vanishes, and never when the sender stops or the ROS host drops off the network
 while the board stays associated. The strip therefore never holds a frozen frame.
 
-A lost BMS (BLE) link is deliberately not shown by this firmware, so a flaky BMS
-never hides the rover's signal animations. The telemetry socket sends the no-data
-payload instead; `rover_battery`'s watchdog expires, and `rover_safety`'s LED tree
-plays the error animation through `rover_led`.
-
 An incoming LED frame is a 4-byte header followed by one `uint32_t` per LED, low
 24 bits used, in `ROVER_LED_COLOR_ORDER`. At the default `ROVER_NUM_LEDS` of 40
 that is 164 bytes, but the length is not required to match: a frame carrying
@@ -175,8 +130,8 @@ to say why.
 
 | Function | Pins |
 |---|---|
-| Nextion display | UART0 (GPIO 1 TX / 3 RX) @ 9600 |
 | LED strip (40 LEDs) | `kLedDataPin` 5, `kLedClockPin` 16 |
+| Debug console | UART0 (GPIO 1 TX / 3 RX) @ 115200 |
 | Debug UART (`ROVER_DEBUG=2` only) | `ROVER_LOG_TX_PIN` 17, RX unassigned |
 
 The debug UART's RX pin is deliberately `-1`: logging only ever transmits, and
@@ -199,9 +154,6 @@ white, so 40 of them want ~2.4 A — an order of magnitude more than a dev board
 5 V at the far end of the strip as well as the head. A 5 V-powered APA102 also
 wants roughly 0.7 × VDD ≈ 3.5 V for a logic high, above the ESP32's 3.3 V output;
 a level shifter (74AHCT125 or similar) on DI and CI removes that margin problem.
-
-WiFi and BLE share the 2.4 GHz radio. The BLE polling traffic adds jitter to UDP
-LED frame timing; this is inherent to running both on one chip.
 
 ## Troubleshooting
 
@@ -272,8 +224,9 @@ disturb the strip while you probe CI and DI at any pixel.
 
 ## Provenance
 
-Superseded `rover_bms_ble_controller` and `rover_led_udp_controller`, which each
-carried a near-identical private copy of `ConnectorInterface`, `WifiConnector`,
-and `UdpConnection`. Those copies are now unified here. The LED code moved from
-namespace `rover_led_controller` to `led_controller`, matching the existing
-`daly100_bms` convention; connectivity and BLE remain in `connector`.
+Branched from the combined `rover_controller` firmware on `master`, which itself
+superseded two separate projects — `rover_bms_ble_controller` and
+`rover_led_udp_controller`. This branch keeps only the LED half of that merge,
+together with the connectivity layer (`ConnectorInterface`, `WifiConnector`,
+`UdpConnection`) the two halves shared. The LED code's namespace stays
+`led_controller`, as on `master`.
