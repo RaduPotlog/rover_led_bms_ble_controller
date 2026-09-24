@@ -15,7 +15,7 @@
 /// @brief Set to 1 to assign a static IP instead of using DHCP.
 /// @note When 0 (the default) the station takes its address from the router's DHCP server.
 #ifndef ROVER_WIFI_USE_STATIC_IP
-#define ROVER_WIFI_USE_STATIC_IP 0
+#define ROVER_WIFI_USE_STATIC_IP 1
 #endif
 
 namespace config
@@ -73,7 +73,7 @@ constexpr unsigned long kWifiReconnectMs = 5000UL;
 
 #if ROVER_WIFI_USE_STATIC_IP
 /// @brief Static address to claim when ROVER_WIFI_USE_STATIC_IP is enabled.
-inline IPAddress static_ip()  { return IPAddress(192, 168, 77, 201); }
+inline IPAddress static_ip()  { return IPAddress(192, 168, 77, 202); }
 /// @brief Default gateway used with static_ip().
 inline IPAddress gateway()    { return IPAddress(192, 168, 77, 1); }
 /// @brief Subnet mask used with static_ip().
@@ -92,7 +92,7 @@ inline IPAddress dns2()       { return IPAddress(8, 8, 4, 4); }
  */
 
 /// @brief Port the LED socket listens on for incoming colour frames.
-constexpr int kLedUdpPort = 3333;
+constexpr int kLedUdpPort = 3334;
 
 /* --------------------------------------------------------------------------
  * LED strip
